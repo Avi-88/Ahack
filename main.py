@@ -4,13 +4,18 @@ from livekit import api
 import os
 import json
 from datetime import datetime
+from typing import Optional
 from dotenv import load_dotenv
 
 # Import our modules
 from auth import get_current_user, User
 from database import db
+from pydantic import BaseModel
 
 load_dotenv()
+
+class CreateSessionRequest(BaseModel):
+    session_id: Optional[str] = None  # If provided, try to resume this session
 
 app = FastAPI()
 
@@ -39,12 +44,38 @@ lk_manager = LiveKitManager()
 
 @app.post("/api/create-session")
 async def create_therapy_session(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    session_id: Optional[str] = None
 ):
     """Called by frontend to start therapy session"""
     
     # 1. Create unique room name
     room_name = f"therapy_{current_user.id}_{int(datetime.now().timestamp())}"
+    isRestartSession = None
+    room_metadata = None
+
+    if session_id:
+        isRestartSession = await db.get_session_by_id(session_id)
+
+    if isRestartSession:
+        room_name = isRestartSession.room_name
+        room_metadata = {
+            "user_id": current_user.id,
+            "user_name": current_user.name or current_user.email,
+            "session_id": session_id,
+            "summary": isRestartSession.summary,
+            "key_topics": isRestartSession.key_topics,
+            "primary_emotions": isRestartSession.primary_emotions
+        }
+    else:
+        room_metadata = {
+            "user_id": current_user.id,
+            "user_name": current_user.name or current_user.email,
+            "session_id": session_id,
+            "summary": None,
+            "key_topics": None,
+            "primary_emotions": None
+        }
     
     # 2. Create room in LiveKit server
     await lk_manager.room_service.room.create_room(
@@ -52,19 +83,17 @@ async def create_therapy_session(
             name=room_name,
             empty_timeout=300,
             max_participants=2,
-            metadata=json.dumps({
-                "user_id": current_user.id,
-                "user_name": current_user.name or current_user.email,
-                "session_type": "therapy"
-            })
+            metadata=json.dumps(room_metadata)
         )
     )
     
     # 3. Save to database using Prisma
-    session = await db.create_session(
-        user_id=current_user.id,
-        room_name=room_name
-    )
+    session = None
+    if not isRestartSession:
+        session = await db.create_session(
+            user_id=current_user.id,
+            room_name=room_name
+        )
     
     # 4. Generate access token for user
     token = api.AccessToken(
@@ -78,13 +107,12 @@ async def create_therapy_session(
              room=room_name
          ))
     
-    # 5. LiveKit will automatically dispatch your agent worker
     
     return {
         "room_name": room_name,
         "token": token.to_jwt(),
         "ws_url": os.getenv("LIVEKIT_URL"),
-        "session_id": session.id
+        "session_id": session.id if not isRestartSession else session_id
     }
 
 @app.get("/api/session-history")

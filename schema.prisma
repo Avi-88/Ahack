@@ -40,12 +40,8 @@ model Session {
   mood_score      Float?       // Overall mood score (-1 to 1)
   sentiment_trend Json?        // Sentiment progression over time
   
-  // Therapy-specific insights
-  therapeutic_goals    String[] @default([]) // Goals identified/worked on
   coping_strategies    String[] @default([]) // Strategies discussed
   breakthrough_moments String?               // Key insights or breakthroughs
-  homework_assigned    String?               // Follow-up tasks
-  progress_notes       String?               // Therapist observations
   
   // Analytics metadata
   word_count          Int?     // Total words spoken by user
