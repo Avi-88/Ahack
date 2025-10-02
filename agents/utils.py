@@ -9,7 +9,7 @@ class DeepgramWrapper:
         api_key = os.getenv("DG_API_KEY")
         self.client = DeepgramClient(api_key)
 
-    def get_audio_intelligence(self, audio_bytes: bytes):
+    async def get_audio_intelligence(self, audio_bytes: bytes):
         try:
             payload: FileSource = {"buffer": audio_bytes}
 
@@ -29,41 +29,39 @@ class DeepgramWrapper:
             return None
 
     def extract_context(self, api_result: dict):
-        context = {
-            "sentiments": None,
-            "intents": None
-        }
+        results = api_result.get("results", {})
+        sentiments = results.get("sentiments", {})
+        intents = results.get("intents", {})
+        intents_summary = []
+        sentiments_summary = []
 
+        print(f"TWF:{results}")
         try:
-            sentiments = api_result.get("results", {}).get("sentiments", {})
-            if sentiments:
-                context["sentiments"] = {
-                    "average": sentiments.get("average"),
-                    "segments": [
-                        {
-                            "text": seg.get("text"),
-                            "sentiment": seg.get("sentiment"),
-                            "score": seg.get("sentiment_score"),
-                        }
-                        for seg in sentiments.get("segments", [])
-                    ]
-                }
+            # Average sentiment
+            avg = sentiments.get("average", {})
+            avg_sentiment = avg.get("sentiment", "unknown")
+            avg_score = avg.get("sentiment_score", 0)
 
-            intents = api_result.get("results", {}).get("intents", {})
-            if intents:
-                extracted_intents = []
-                for seg in intents.get("segments", []):
-                    for intent in seg.get("intents", []):
-                        extracted_intents.append({
-                            "text": seg.get("text"),
-                            "intent": intent.get("intent"),
-                            "confidence": intent.get("confidence_score"),
-                        })
+            # Extract notable sentiment segments
+            for seg in sentiments.get("segments", []):
+                if abs(seg.get('score', 0)) > 0.3:
+                    sentiments_summary.append(f"'{seg['text']}' → {seg['sentiment']}")
 
-                context["intents"] = extracted_intents
+            # Extract significant intents
+            for seg in intents.get("segments", []):
+                for intent in seg.get("intents", []):   
+                    if intent.get("confidence_score", 0) > 0.1:
+                        intents_summary.append(f"'{intent['text']}' → {intent['intent']}")
+
+            context_msg = (
+                f"Overall Sentiment: {avg_sentiment} (score: {avg_score})\n"
+                f"Notable segments: {', '.join(sentiments_summary) if sentiments_summary else 'None'}\n"
+                f"Detected intents: {', '.join(intents_summary) if intents_summary else 'None'}"
+            )
+
+            return context_msg
 
         except Exception as e:
             print(f"Error extracting context: {e}")
-
-        return context
+            return None
 
