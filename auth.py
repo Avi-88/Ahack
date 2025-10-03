@@ -5,11 +5,17 @@ import jwt
 import os
 from typing import Optional
 from pydantic import BaseModel
+import logging
+from dotenv import load_dotenv
+
+
+load_dotenv(".env")
 
 # Supabase client
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
+logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
@@ -48,19 +54,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         return user
         
     except Exception as e:
+        logger.error("Failed to get current user")
         raise HTTPException(
             status_code=401,
             detail=f"Authentication failed: {str(e)}"
         )
 
-async def get_optional_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[User]:
-    """
-    Optional authentication - returns None if no valid token
-    """
-    if not credentials:
-        return None
-    
-    try:
-        return await get_current_user(credentials)
-    except HTTPException:
-        return None

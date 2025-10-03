@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from livekit import api
+from livekit.api import RoomConfiguration, RoomAgentDispatch
 import os
 import json
 from datetime import datetime
@@ -8,14 +9,23 @@ from typing import Optional
 from dotenv import load_dotenv
 
 # Import our modules
-from auth import get_current_user, User
+from auth import get_current_user, User, supabase
 from database import db
 from pydantic import BaseModel
 
-load_dotenv()
+load_dotenv(".env")
 
 class CreateSessionRequest(BaseModel):
-    session_id: Optional[str] = None  # If provided, try to resume this session
+    session_id: Optional[str] = None
+
+class SignInRequest(BaseModel):
+    email: str
+    password: str
+
+class SignUpRequest(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None  
 
 app = FastAPI()
 
@@ -33,7 +43,6 @@ class LiveKitManager:
         self.api_secret = os.getenv("LIVEKIT_API_SECRET")
         self.livekit_url = os.getenv("LIVEKIT_URL")
         
-        # LiveKit API client for room management
         self.room_service = api.LiveKitAPI(
             self.livekit_url,
             self.api_key,
@@ -42,42 +51,99 @@ class LiveKitManager:
 
 lk_manager = LiveKitManager()
 
+@app.post("/auth/signin")
+async def signin(request: SignInRequest):
+    """Sign in user with email and password"""
+    try:
+        response = supabase.auth.sign_in_with_password({
+            "email": request.email,
+            "password": request.password
+        })
+        
+        if response.user:
+            return {
+                "access_token": response.session.access_token,
+                "refresh_token": response.session.refresh_token,
+                "user": {
+                    "id": response.user.id,
+                    "email": response.user.email,
+                    "name": response.user.user_metadata.get('name', response.user.email.split('@')[0])
+                }
+            }
+        else:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+            
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
+
+@app.post("/auth/signup")  
+async def signup(request: SignUpRequest):
+    """Sign up new user with email and password"""
+    try:
+        response = supabase.auth.sign_up({
+            "email": request.email,
+            "password": request.password,
+            "options": {
+                "data": {
+                    "name": request.name or request.email.split('@')[0]
+                }
+            }
+        })
+        
+        if response.user:
+            return {
+                "message": "User created successfully. Please check your email for verification.",
+                "user": {
+                    "id": response.user.id,
+                    "email": response.user.email,
+                    "name": request.name or request.email.split('@')[0]
+                }
+            }
+        else:
+            raise HTTPException(status_code=400, detail="Failed to create user")
+            
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Registration failed: {str(e)}")
+
+@app.post("/auth/signout")
+async def signout(current_user: User = Depends(get_current_user)):
+    """Sign out current user"""
+    try:
+        supabase.auth.sign_out()
+        return {"message": "Successfully signed out"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Sign out failed: {str(e)}")
+
+@app.get("/auth/me")
+async def get_me(current_user: User = Depends(get_current_user)):
+    """Get current user info"""
+    return current_user
+
 @app.post("/api/create-session")
 async def create_therapy_session(
     current_user: User = Depends(get_current_user),
-    session_id: Optional[str] = None
 ):
     """Called by frontend to start therapy session"""
-    
+    print(current_user)
     # 1. Create unique room name
-    room_name = f"therapy_{current_user.id}_{int(datetime.now().timestamp())}"
-    isRestartSession = None
-    room_metadata = None
+    room_name = f"emotional_guidance_{current_user.id}_{int(datetime.now().timestamp())}"
+    # 2. Save to database using Prisma
+    session = await db.create_session(
+        user_id=current_user.id
+    )
+    if not session:
+        return {"status_code": 500, "detail": f"Failed to create a session"}
 
-    if session_id:
-        isRestartSession = await db.get_session_by_id(session_id)
-
-    if isRestartSession:
-        room_name = isRestartSession.room_name
-        room_metadata = {
-            "user_id": current_user.id,
-            "user_name": current_user.name or current_user.email,
-            "session_id": session_id,
-            "summary": isRestartSession.summary,
-            "key_topics": isRestartSession.key_topics,
-            "primary_emotions": isRestartSession.primary_emotions
-        }
-    else:
-        room_metadata = {
-            "user_id": current_user.id,
-            "user_name": current_user.name or current_user.email,
-            "session_id": session_id,
-            "summary": None,
-            "key_topics": None,
-            "primary_emotions": None
-        }
+    room_metadata = {
+        "user_id": current_user.id,
+        "user_name": current_user.name or current_user.email,
+        "session_id": session.id,
+        "summary": None,
+        "key_topics": None,
+        "primary_emotions": None
+    }
     
-    # 2. Create room in LiveKit server
+    # 3. Create room in LiveKit server
     await lk_manager.room_service.room.create_room(
         api.CreateRoomRequest(
             name=room_name,
@@ -87,13 +153,7 @@ async def create_therapy_session(
         )
     )
     
-    # 3. Save to database using Prisma
-    session = None
-    if not isRestartSession:
-        session = await db.create_session(
-            user_id=current_user.id,
-            room_name=room_name
-        )
+
     
     # 4. Generate access token for user
     token = api.AccessToken(
@@ -101,18 +161,24 @@ async def create_therapy_session(
         api_secret=lk_manager.api_secret
     )
     token.with_identity(current_user.id)\
-         .with_name(current_user.name or current_user.email)\
-         .with_grants(api.VideoGrants(
+        .with_name(current_user.name or current_user.email)\
+        .with_grants(api.VideoGrants(
              room_join=True,
              room=room_name
-         ))
+        ))\
+        .with_room_config(
+            RoomConfiguration(
+                agents=[
+                    RoomAgentDispatch(agent_name="miso", metadata=json.dumps(room_metadata))
+                ],
+            ),
+        )
     
     
     return {
         "room_name": room_name,
         "token": token.to_jwt(),
-        "ws_url": os.getenv("LIVEKIT_URL"),
-        "session_id": session.id if not isRestartSession else session_id
+        "session_id": session.id 
     }
 
 @app.get("/api/session-history")
@@ -134,7 +200,7 @@ async def resume_therapy_session(
         raise HTTPException(status_code=404, detail="Session not found")
     
     # 2. Create new room for resumed conversation
-    room_name = f"therapy_{current_user.id}_{int(datetime.now().timestamp())}_resume"
+    room_name = f"emotional_guidance_{current_user.id}_{int(datetime.now().timestamp())}_resume"
     
     # 3. Create room with previous session context
     await lk_manager.room_service.room.create_room(
@@ -145,25 +211,12 @@ async def resume_therapy_session(
             metadata=json.dumps({
                 "user_id": current_user.id,
                 "user_name": current_user.name or current_user.email,
-                "session_type": "therapy",
-                "resume_session_id": session_id,
-                "previous_context": {
-                    "summary": previous_session.summary,
-                    "key_topics": previous_session.key_topics,
-                    "therapeutic_goals": previous_session.therapeutic_goals,
-                    "coping_strategies": previous_session.coping_strategies,
-                    "homework_assigned": previous_session.homework_assigned,
-                    "mood_score": previous_session.mood_score,
-                    "primary_emotions": previous_session.primary_emotions
-                }
+                "session_id": session_id,
+                "summary": previous_session.summary,
+                "key_topics": previous_session.key_topics,
+                "primary_emotions": previous_session.primary_emotions
             })
         )
-    )
-    
-    # 4. Create new session entry
-    new_session = await db.create_session(
-        user_id=current_user.id,
-        room_name=room_name
     )
     
     # 5. Generate access token
@@ -176,19 +229,19 @@ async def resume_therapy_session(
          .with_grants(api.VideoGrants(
              room_join=True,
              room=room_name
-         ))
+         ))\
+         .with_room_config(
+            RoomConfiguration(
+                agents=[
+                    RoomAgentDispatch(agent_name="miso", metadata=json.dumps(room_metadata))
+                ],
+            ),
+        )
     
     return {
         "room_name": room_name,
         "token": token.to_jwt(),
-        "ws_url": os.getenv("LIVEKIT_URL"),
-        "session_id": new_session.id,
-        "resumed_from": session_id,
-        "previous_context": {
-            "summary": previous_session.summary,
-            "key_topics": previous_session.key_topics,
-            "last_mood_score": previous_session.mood_score
-        }
+        "session_id": previous_session.id,
     }
 
 @app.get("/api/analytics/mood-trends")

@@ -9,7 +9,7 @@ import io
 import wave
 
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions, RunContext, ModelSettings, stt
+from livekit.agents import AgentSession, Agent, RoomInputOptions, RunContext, ModelSettings, stt, WorkerType
 from livekit.agents.llm import function_tool, ChatContext, ChatMessage
 from livekit.plugins import (
     openai,
@@ -26,41 +26,31 @@ load_dotenv(".env.agent")
 
 
 class Miso(Agent):
-    def __init__(self):
-        super().__init__(instructions="""You are a compassionate and empathetic mental health assistant. Your goal is to **understand the user’s emotions and provide supportive guidance**, not medical diagnoses or treatment.
-
-Guidelines:
-
-1. **Recognize emotions:** Identify the user’s feelings, tone, and sentiment (e.g., sadness, anxiety, stress, frustration, loneliness).  
-
-2. **Respond with empathy:** Validate and acknowledge their emotions. Use warm, understanding, and patient language. Example: “It sounds like you’re feeling overwhelmed, and that’s understandable.”  
-
-3. **Provide safe guidance:** Offer general coping strategies like deep breathing, mindfulness, journaling, talking to someone trusted, or grounding exercises. Focus on helping the user navigate their feelings safely.  
-
-4. **Never diagnose or prescribe:** Do not give medical advice, clinical diagnoses, or treatment suggestions.  
-
-5. **Encourage support when needed:** Suggest seeking professional help if appropriate, phrased gently: “Talking to a trained professional can sometimes help when feelings are intense.”  
-
-6. **Follow the user’s lead:** Let the user describe their experience in their own words. Tailor responses to their needs without assumptions.  
-
-Your responses should always be **empathetic, validating, supportive, and safe**, helping the user process emotions constructively.
-""")
-        # self.session_id = session_id
-        # self.user_id = user_id
+    def __init__(self, session_id, user_id):
+        super().__init__(
+            instructions=
+            """You are a compassionate and empathetic mental health assistant. Your goal is to **understand the user’s emotions and provide supportive guidance**, not medical diagnoses or treatment.
+                Guidelines:
+                1. **Recognize emotions:** Identify the user’s feelings, tone, and sentiment (e.g., sadness, anxiety, stress, frustration, loneliness).  
+                2. **Respond with empathy:** Validate and acknowledge their emotions. Use warm, understanding, and patient language. Example: “It sounds like you’re feeling overwhelmed, and that’s understandable.”  
+                3. **Provide safe guidance:** Offer general coping strategies like deep breathing, mindfulness, journaling, talking to someone trusted, or grounding exercises. Focus on helping the user navigate their feelings safely.  
+                4. **Never diagnose or prescribe:** Do not give medical advice, clinical diagnoses, or treatment suggestions.  
+                5. **Encourage support when needed:** Suggest seeking professional help if appropriate, phrased gently: “Talking to a trained professional can sometimes help when feelings are intense.”  
+                6. **Follow the user’s lead:** Let the user describe their experience in their own words. Tailor responses to their needs without assumptions.  
+                Your responses should always be **empathetic, validating, supportive, and safe**, helping the user process emotions constructively.
+            """)
+        self.session_id = session_id
+        self.user_id = user_id
+        self.db_pool = None
         self.deepgram = DeepgramWrapper()
-        # self.db_pool = None
         self.audio_buffer_list = []
         self.audio_file = None
 
 
-    # async def setup(self):
-    #     """Initialize database connection"""
-    #     self.db_pool = await asyncpg.create_pool(
-    #         'postgresql://user:pass@localhost/therapy_db'
-    #     )
+    async def setup(self):
+        database_url = os.getenv("DATABASE_URL")
+        self.db_pool = await asyncpg.create_pool(database_url)
         
-    #     isRestart  = 
-    #     await self.load_user_context()
 
     async def stt_node(
         self, 
@@ -104,12 +94,10 @@ Your responses should always be **empathetic, validating, supportive, and safe**
 
         print(intelligent_context)
         if intelligent_context:
-            # 2. Add sentiment context
             turn_ctx.add_message(
                 role="system", 
                 content=f"Emotional Context: {intelligent_context}"
             )
-        # 4. Update the context
         await self.update_chat_ctx(turn_ctx)
             
     
@@ -161,9 +149,9 @@ Your responses should always be **empathetic, validating, supportive, and safe**
 
 
 async def entrypoint(ctx: agents.JobContext):
-    # room_metadata = json.loads(ctx.room.metadata)
-    # session_id = room_metadata["session_id"]
-    # user_id = room_metadata["user_id"]
+    room_metadata = json.loads(ctx.room.metadata)
+    session_id = room_metadata["session_id"]
+    user_id = room_metadata["user_id"]
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
         llm=openai.LLM.with_cerebras(model="llama-3.3-70b"),
@@ -172,9 +160,19 @@ async def entrypoint(ctx: agents.JobContext):
         turn_detection=MultilingualModel(),
     )
 
+    async def end_session_hook():
+        current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"/tmp/transcript_{ctx.room.name}_{current_date}.json"
+        
+        with open(filename, 'w') as f:
+            json.dump(session.history.to_dict(), f, indent=2)
+            
+        print(f"Transcript for {ctx.room.name} saved to {filename}")
+
+
     await session.start(
         room=ctx.room,
-        agent=Miso(),
+        agent=Miso(session_id, user_id),
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(), 
         ),
@@ -184,6 +182,8 @@ async def entrypoint(ctx: agents.JobContext):
         instructions="Greet the user with a quick small warm greeting"
     )
 
+    ctx.add_shutdown_callback(end_session_hook)
+
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint, agent_name="miso", worker_type=WorkerType.PUBLISHER, shutdown_process_timeout=30))

@@ -1,56 +1,43 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-py"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
+  id         String    @id @default(cuid())
+  email      String    @unique
+  name       String?
   avatar_url String?
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-  
-  // Relationships
+  created_at DateTime  @default(now())
+  updated_at DateTime  @default(now()) @updatedAt
   sessions   Session[]
-  
+
   @@map("users")
 }
 
 model Session {
-  id           String        @id @default(cuid())
-  user_id      String
-  room_name    String        @unique
-  status       SessionStatus @default(ACTIVE)
-  started_at   DateTime      @default(now())
-  ended_at     DateTime?
-  duration     Int?          // in seconds
-  
-  // Session Analysis (populated after session ends)
-  summary         String?
-  key_topics      String[]     @default([]) // Array of key topics discussed
-  primary_emotions String[]    @default([]) // Main emotions detected
-  mood_score      Float?       // Overall mood score (-1 to 1)
-  sentiment_trend Json?        // Sentiment progression over time
-  
-  coping_strategies    String[] @default([]) // Strategies discussed
-  breakthrough_moments String?               // Key insights or breakthroughs
-  
-  // Analytics metadata
-  word_count          Int?     // Total words spoken by user
-  engagement_score    Float?   // How engaged the user was (0-1)
-  stress_indicators   String[] @default([]) // Signs of stress/anxiety
-  
-  // Relationships
-  user         User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  
+  id                   String        @id @default(cuid())
+  user_id              String
+  status               SessionStatus @default(ACTIVE)
+  started_at           DateTime      @default(now())
+  ended_at             DateTime?
+  duration             Int?
+  summary              String?
+  key_topics           String[]      @default([])
+  primary_emotions     String[]      @default([])
+  mood_score           Float?
+  sentiment_trend      Json?
+  breakthrough_moments String?
+  word_count           Int?
+  engagement_score     Float?
+  stress_indicators    String[]      @default([])
+  user                 User          @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
   @@map("sessions")
 }
 

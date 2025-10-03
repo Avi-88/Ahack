@@ -4,8 +4,10 @@ import os
 import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+load_dotenv(".env")
 
 class DatabaseManager:
     def __init__(self):
@@ -32,16 +34,14 @@ class DatabaseManager:
                 logger.info("Database disconnected successfully")
             except Exception as e:
                 logger.error(f"Error disconnecting from database: {e}")
-                # Don't raise here as we want to continue even if disconnect fails
     
-    async def create_session(self, user_id: str, room_name: str):
+    async def create_session(self, user_id: str):
         """Create a new therapy session with error handling"""
         try:
             await self.connect()
             session = await self.prisma.session.create(
                 data={
                     'user_id': user_id,
-                    'room_name': room_name,
                     'status': 'ACTIVE'
                 }
             )
