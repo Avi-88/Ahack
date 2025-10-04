@@ -23,6 +23,7 @@ model User {
 model Session {
   id                   String        @id @default(cuid())
   user_id              String
+  room_name            String
   status               SessionStatus @default(ACTIVE)
   started_at           DateTime      @default(now())
   ended_at             DateTime?

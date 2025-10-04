@@ -91,6 +91,25 @@ class DatabaseManager:
             logger.error(f"Unexpected error getting session {session_id}: {e}")
             raise
     
+    async def get_session_by_room_name(self, room_name: str):
+        """Get a specific session by room name"""
+        try:
+            await self.connect()
+            session = await self.prisma.session.find_first(
+                where={'room_name': room_name}
+            )
+            if session:
+                logger.info(f"Session for room {room_name} retrieved successfully")
+            else:
+                logger.warning(f"Session for room {room_name} not found")
+            return session
+        except PrismaError as e:
+            logger.error(f"Database error getting session by room name {room_name}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error getting session by room name {room_name}: {e}")
+            raise
+    
     async def complete_session_with_analysis(
         self,
         session_id: str,
@@ -100,11 +119,7 @@ class DatabaseManager:
         primary_emotions: List[str],
         mood_score: float,
         sentiment_trend: Dict[str, Any] = None,
-        therapeutic_goals: List[str] = None,
-        coping_strategies: List[str] = None,
         breakthrough_moments: str = None,
-        homework_assigned: str = None,
-        progress_notes: str = None,
         word_count: int = None,
         engagement_score: float = None,
         stress_indicators: List[str] = None
@@ -124,11 +139,7 @@ class DatabaseManager:
                     'primary_emotions': primary_emotions or [],
                     'mood_score': mood_score,
                     'sentiment_trend': sentiment_trend,
-                    'therapeutic_goals': therapeutic_goals or [],
-                    'coping_strategies': coping_strategies or [],
                     'breakthrough_moments': breakthrough_moments,
-                    'homework_assigned': homework_assigned,
-                    'progress_notes': progress_notes,
                     'word_count': word_count,
                     'engagement_score': engagement_score,
                     'stress_indicators': stress_indicators or []

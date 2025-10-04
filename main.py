@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from auth import get_current_user, User, supabase
 from database import db
 from pydantic import BaseModel
+import openai
 
 load_dotenv(".env")
 
@@ -25,7 +26,12 @@ class SignInRequest(BaseModel):
 class SignUpRequest(BaseModel):
     email: str
     password: str
-    name: Optional[str] = None  
+    name: Optional[str] = None
+
+class SessionTranscriptWebhook(BaseModel):
+    room_name: str
+    transcript: str
+    duration_seconds: int
 
 app = FastAPI()
 
@@ -50,6 +56,87 @@ class LiveKitManager:
         )
 
 lk_manager = LiveKitManager()
+
+# Initialize OpenAI client
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+async def analyze_session_with_llm(transcript: str, duration_seconds: int) -> dict:
+    """Use LLM to analyze session transcript and generate insights"""
+    
+    analysis_prompt = f"""
+    Analyze the following therapy session transcript and provide detailed insights. The session lasted {duration_seconds} seconds.
+
+    Transcript:
+    {transcript}
+
+    Please provide analysis in the following JSON format:
+    {{
+        "summary": "Brief 2-3 sentence summary of the session",
+        "key_topics": ["topic1", "topic2", "topic3"],
+        "primary_emotions": ["emotion1", "emotion2", "emotion3"],
+        "mood_score": 7.5,
+        "sentiment_trend": {{"overall": "positive", "progression": "improving", "notable_shifts": ["point1", "point2"]}},
+        "breakthrough_moments": "Description of any significant insights or breakthroughs",
+        "word_count": 1500,
+        "engagement_score": 8.2,
+        "stress_indicators": ["indicator1", "indicator2"]
+    }}
+
+    Guidelines:
+    - mood_score: 1-10 scale (1=very negative, 10=very positive)
+    - engagement_score: 1-10 scale (1=very disengaged, 10=highly engaged)
+    - key_topics: 3-5 main themes discussed
+    - primary_emotions: 3-5 emotions detected throughout the session
+    - stress_indicators: Signs of stress, anxiety, or distress mentioned
+    - sentiment_trend: Overall emotional direction and notable changes
+    - breakthrough_moments: Significant realizations, insights, or progress moments
+    - word_count: Approximate number of words in the transcript
+
+    Focus on therapeutic value and emotional insights. Be empathetic and professional.
+    """
+    
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a professional therapy session analyzer. Provide insightful, empathetic analysis of therapy sessions to help track emotional progress and therapeutic outcomes."},
+                {"role": "user", "content": analysis_prompt}
+            ],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        
+        # Parse the JSON response
+        import json
+        analysis_text = response.choices[0].message.content.strip()
+        
+        # Try to extract JSON from the response
+        if "```json" in analysis_text:
+            json_start = analysis_text.find("```json") + 7
+            json_end = analysis_text.find("```", json_start)
+            analysis_text = analysis_text[json_start:json_end].strip()
+        
+        analysis_data = json.loads(analysis_text)
+        
+        return analysis_data
+        
+    except Exception as e:
+        print(f"Error analyzing session with LLM: {e}")
+        # Return default analysis if LLM fails
+        return {
+            "summary": "Session completed successfully",
+            "key_topics": ["general discussion"],
+            "primary_emotions": ["neutral"],
+            "mood_score": 5.0,
+            "sentiment_trend": {"overall": "neutral", "progression": "stable"},
+            "breakthrough_moments": None,
+            "word_count": len(transcript.split()),
+            "engagement_score": 5.0,
+            "stress_indicators": []
+        }
 
 @app.post("/auth/signin")
 async def signin(request: SignInRequest):
@@ -129,7 +216,8 @@ async def create_therapy_session(
     room_name = f"emotional_guidance_{current_user.id}_{int(datetime.now().timestamp())}"
     # 2. Save to database using Prisma
     session = await db.create_session(
-        user_id=current_user.id
+        user_id=current_user.id,
+        room_name=room_name,
     )
     if not session:
         return {"status_code": 500, "detail": f"Failed to create a session"}
@@ -358,6 +446,87 @@ async def complete_session_analysis(
     )
     
     return {"message": "Session completed successfully", "session": completed_session}
+
+@app.post("/webhooks/session-transcript")
+async def receive_session_transcript(webhook_data: SessionTranscriptWebhook):
+    """Webhook endpoint for agents to send session transcripts"""
+    
+    try:
+        # Find session by room name
+        print(f"this is from miso: {webhook_data}")
+        # session = await db.get_session_by_room_name(webhook_data.room_name)
+        # if not session:
+        #     raise HTTPException(status_code=404, detail=f"Session not found for room: {webhook_data.room_name}")
+        
+        # # Check if session is already completed
+        # if session.status != 'ACTIVE':
+        #     return {"message": "Session already processed", "session_id": session.id, "room_name": webhook_data.room_name}
+        
+        # print(f"🔄 Processing transcript for room {webhook_data.room_name} (session {session.id})")
+        # print(f"📝 Transcript length: {len(webhook_data.transcript)} characters")
+        
+        # # Analyze transcript with LLM
+        # analysis_data = await analyze_session_with_llm(
+        #     webhook_data.transcript, 
+        #     webhook_data.duration_seconds
+        # )
+        
+        # print(f"🧠 LLM Analysis completed: {analysis_data}")
+        
+        # # Update session with analysis data
+        # completed_session = await db.complete_session_with_analysis(
+        #     session_id=session.id,
+        #     duration=webhook_data.duration_seconds,
+        #     summary=analysis_data.get('summary', ''),
+        #     key_topics=analysis_data.get('key_topics', []),
+        #     primary_emotions=analysis_data.get('primary_emotions', []),
+        #     mood_score=analysis_data.get('mood_score'),
+        #     sentiment_trend=analysis_data.get('sentiment_trend'),
+        #     breakthrough_moments=analysis_data.get('breakthrough_moments'),
+        #     word_count=analysis_data.get('word_count'),
+        #     engagement_score=analysis_data.get('engagement_score'),
+        #     stress_indicators=analysis_data.get('stress_indicators', [])
+        # )
+        
+        # print(f"✅ Session {session.id} completed successfully")
+        
+        # return {
+        #     "message": "Transcript processed successfully", 
+        #     "session_id": session.id,
+        #     "room_name": webhook_data.room_name,
+        #     "analysis_summary": {
+        #         "mood_score": analysis_data.get('mood_score'),
+        #         "key_topics": analysis_data.get('key_topics', []),
+        #         "engagement_score": analysis_data.get('engagement_score')
+        #     }
+        # }
+        return {
+            "status": 200,
+            "message": "Success"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"💥 Error processing transcript webhook: {e}")
+        
+        # Mark session as ERROR if processing fails
+        try:
+            if 'session' in locals() and session:
+                await db.prisma.session.update(
+                    where={'id': session.id},
+                    data={
+                        'status': 'ERROR',
+                        'ended_at': datetime.now()
+                    }
+                )
+        except:
+            pass  # Don't fail the webhook if status update fails
+            
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to process transcript: {str(e)}"
+        )
 
 # Startup/shutdown events
 @app.on_event("startup")

@@ -8,6 +8,8 @@ from typing import Optional
 import io
 import wave
 import logging
+import aiohttp
+import os
 
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions, RunContext, ModelSettings, stt, WorkerType
@@ -29,7 +31,7 @@ load_dotenv(".env.local")
 
 
 class Miso(Agent):
-    def __init__(self):
+    def __init__(self, room_name):
         super().__init__(
             instructions=
             """You are a compassionate and empathetic mental health assistant. Your goal is to **understand the user’s emotions and provide supportive guidance**, not medical diagnoses or treatment.
@@ -42,8 +44,8 @@ class Miso(Agent):
                 6. **Follow the user’s lead:** Let the user describe their experience in their own words. Tailor responses to their needs without assumptions.  
                 Your responses should always be **empathetic, validating, supportive, and safe**, helping the user process emotions constructively.
             """)
-        # self.session_id = session_id
-        # self.user_id = user_id
+
+        self.room_name = room_name
         self.db_pool = None
         self.deepgram = DeepgramWrapper()
         self.audio_buffer_list = []
@@ -103,55 +105,16 @@ class Miso(Agent):
             )
         await self.update_chat_ctx(turn_ctx)
             
-    
-    # @function_tool()
-    # async def save_conversation_turn(
-    #     self, 
-    #     ctx: RunContext,
-    #     text: str,
-    #     speaker: str,
-    #     emotion: str = None
-    # ):
-    #     """Save each conversation turn to database"""
-    #     async with self.db_pool.acquire() as conn:
-    #         await conn.execute("""
-    #             INSERT INTO conversation_turns 
-    #             (session_id, speaker, text, emotion, timestamp)
-    #             VALUES ($1, $2, $3, $4, $5)
-    #         """, self.session_id, speaker, text, emotion, datetime.now())
-    
-    # async def on_session_end(self):
-    #     """When conversation ends, generate and save summary"""
-    #     # Generate summary using Deepgram
-    #     full_transcript = self.context_manager.get_full_transcript()
-    #     summary = await deepgram.summarize(full_transcript)
-        
-    #     async with self.db_pool.acquire() as conn:
-    #         # Save session summary
-    #         await conn.execute("""
-    #             INSERT INTO session_summaries
-    #             (session_id, summary, key_topics, emotional_journey)
-    #             VALUES ($1, $2, $3, $4)
-    #         """, 
-    #         self.session_id, 
-    #         summary,
-    #         self.context_manager.topics,
-    #         self.context_manager.emotional_journey
-    #         )
-            
-    #         # Update user profile
-    #         await conn.execute("""
-    #             INSERT INTO user_profiles (user_id, last_session_summary, total_sessions)
-    #             VALUES ($1, $2, 1)
-    #             ON CONFLICT (user_id) 
-    #             DO UPDATE SET 
-    #                 last_session_summary = $2,
-    #                 total_sessions = user_profiles.total_sessions + 1,
-    #                 updated_at = NOW()
-    #         """, self.user_id, summary)
 
 
 async def entrypoint(ctx: agents.JobContext):
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    participant = await ctx.wait_for_participant()
+
+    print(f"Room data:{ctx.room.metadata}")
+    
+    # Store session start time
+    session_start_time = datetime.now()
 
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
@@ -163,13 +126,48 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     async def end_session_hook():
-        current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"/tmp/transcript_{ctx.room.name}_{current_date}.json"
-        
-        with open(filename, 'w') as f:
-            json.dump(session.history.to_dict(), f, indent=2)
+        try:
+            # Convert session history to transcript string
+            transcript_data = session.history.to_dict()
+            transcript_text = ""
             
-        print(f"Transcript for {ctx.room.name} saved to {filename}")
+            for item in transcript_data.get('items', []):
+                role = item.get('role', 'unknown')
+                content = item.get('content', '')
+                if role in ['user', 'assistant'] and content.strip():
+                    speaker = "User" if role == 'user' else "Assistant"
+                    transcript_text += f"{speaker}: {content}\n"
+            
+            # Calculate actual session duration
+            duration_seconds = int((datetime.now() - session_start_time).total_seconds())
+            
+            # Prepare webhook payload
+            webhook_payload = {
+                "room_name": ctx.room.name,
+                "transcript": transcript_text,
+                "duration_seconds": duration_seconds
+            }
+            
+            # Send to webhook endpoint
+            webhook_url = f"{os.getenv('BACKEND_SERVER_BASE_URL', 'http://localhost:8000')}/webhooks/session-transcript"
+            
+            async with aiohttp.ClientSession() as client_session:
+                async with client_session.post(
+                    webhook_url,
+                    json=webhook_payload,
+                    headers={'Content-Type': 'application/json'}
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        print(f"✅ Transcript sent for room {ctx.room.name}")
+                    else:
+                        error_text = await response.text()
+                        print(f"❌ Failed to send transcript. Status: {response.status}, Error: {error_text}")
+            
+        except Exception as e:
+            print(f"💥 Error in end_session_hook: {e}")
+            import traceback
+            traceback.print_exc()
 
 
     await session.start(
@@ -181,7 +179,7 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     await session.generate_reply(
-        instructions="Greet the user with a quick small warm greeting"
+        instructions="Greet the user with a quick but warm greeting"
     )
 
     ctx.add_shutdown_callback(end_session_hook)
