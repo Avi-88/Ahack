@@ -12,9 +12,13 @@ from dotenv import load_dotenv
 from auth import get_current_user, User, supabase
 from database import db
 from pydantic import BaseModel
-import openai
+from cerebras.cloud.sdk import Cerebras
+import asyncio
+import logging
 
 load_dotenv(".env")
+
+logger = logging.getLogger(__name__)
 
 class CreateSessionRequest(BaseModel):
     session_id: Optional[str] = None
@@ -57,86 +61,158 @@ class LiveKitManager:
 
 lk_manager = LiveKitManager()
 
-# Initialize OpenAI client
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Initialize Cerebras client
 
-async def analyze_session_with_llm(transcript: str, duration_seconds: int) -> dict:
-    """Use LLM to analyze session transcript and generate insights"""
-    
+
+async def analyze_session_with_llm(transcript: str, duration_seconds: int, max_retries: int = 3) -> dict:
+    """Use LLM to analyze session transcript and generate insights with retry mechanism"""
+
     analysis_prompt = f"""
-    Analyze the following therapy session transcript and provide detailed insights. The session lasted {duration_seconds} seconds.
+        Analyze the following conversation transcript and provide detailed insights. 
+        The conversation lasted {duration_seconds} seconds.
 
-    Transcript:
-    {transcript}
+        Transcript:
+        {transcript}
 
-    Please provide analysis in the following JSON format:
-    {{
-        "summary": "Brief 2-3 sentence summary of the session",
-        "key_topics": ["topic1", "topic2", "topic3"],
-        "primary_emotions": ["emotion1", "emotion2", "emotion3"],
-        "mood_score": 7.5,
-        "sentiment_trend": {{"overall": "positive", "progression": "improving", "notable_shifts": ["point1", "point2"]}},
-        "breakthrough_moments": "Description of any significant insights or breakthroughs",
-        "word_count": 1500,
-        "engagement_score": 8.2,
-        "stress_indicators": ["indicator1", "indicator2"]
-    }}
+        Guidelines:
+        - summary: Write in SECOND PERSON perspective, addressing "you" directly to the user.
+        Describe what happened in the conversation naturally, without explicitly mentioning "the assistant".
+        Example: "You expressed feeling overwhelmed and frustrated with being stuck on a task, 
+        but after discussing your concerns, you gained clarity and renewed energy to tackle the task again. 
+        Through the conversation, you received empathetic support and practical advice, 
+        helping you to reframe your approach and feel more in control."
+        Use natural language like "through the conversation", "after discussing", "you explored", etc.
+        - mood_score: 1-10 scale (1=very negative, 10=very positive)
+        - engagement_score: 1-10 scale (1=very disengaged, 10=highly engaged)
+        - key_topics: 3-5 main themes discussed
+        - primary_emotions: 3-5 emotions detected throughout the session
+        - stress_indicators: Signs of stress, anxiety, or distress mentioned
+        - breakthrough_moments: Significant realizations or insights (in second person: "You realized...")
+        - word_count: Approximate number of words in the transcript
 
-    Guidelines:
-    - mood_score: 1-10 scale (1=very negative, 10=very positive)
-    - engagement_score: 1-10 scale (1=very disengaged, 10=highly engaged)
-    - key_topics: 3-5 main themes discussed
-    - primary_emotions: 3-5 emotions detected throughout the session
-    - stress_indicators: Signs of stress, anxiety, or distress mentioned
-    - sentiment_trend: Overall emotional direction and notable changes
-    - breakthrough_moments: Significant realizations, insights, or progress moments
-    - word_count: Approximate number of words in the transcript
+        Focus on therapeutic value and emotional insights. Be empathetic and professional.
+        Write as if speaking directly to the person, describing their journey through the conversation 
+        without explicitly referencing the assistant.
+        """
 
-    Focus on therapeutic value and emotional insights. Be empathetic and professional.
-    """
-    
-    try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        
-        response = await client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a professional therapy session analyzer. Provide insightful, empathetic analysis of therapy sessions to help track emotional progress and therapeutic outcomes."},
-                {"role": "user", "content": analysis_prompt}
-            ],
-            temperature=0.3,
-            max_tokens=1000
-        )
-        
-        # Parse the JSON response
-        import json
-        analysis_text = response.choices[0].message.content.strip()
-        
-        # Try to extract JSON from the response
-        if "```json" in analysis_text:
-            json_start = analysis_text.find("```json") + 7
-            json_end = analysis_text.find("```", json_start)
-            analysis_text = analysis_text[json_start:json_end].strip()
-        
-        analysis_data = json.loads(analysis_text)
-        
-        return analysis_data
-        
-    except Exception as e:
-        print(f"Error analyzing session with LLM: {e}")
-        # Return default analysis if LLM fails
+    analysis_schema = {
+        "type": "object",
+        "properties": {
+            "summary": {
+                "type": "string",
+                "description": "Brief 5-6 sentence summary of the session"
+            },
+            "key_topics": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "3-5 main themes discussed in the conversation"
+            },
+            "primary_emotions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "3-5 emotions detected throughout the session"
+            },
+            "mood_score": {
+                "type": "number",
+                "description": "Overall mood on 1-10 scale"
+            },
+            "breakthrough_moments": {
+                "type": "string",
+                "description": "Description of any significant insights or breakthroughs"
+            },
+            "word_count": {
+                "type": "integer",
+                "description": "Approximate number of words in the transcript"
+            },
+            "engagement_score": {
+                "type": "number",
+                "description": "Engagement level on 1-10 scale"
+            },
+            "stress_indicators": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Signs of stress, anxiety, or distress"
+            }
+        },
+        "required": [
+            "summary",
+            "key_topics",
+            "primary_emotions",
+            "mood_score",
+            "word_count",
+            "engagement_score",
+            "stress_indicators"
+        ],
+        "additionalProperties": False
+    }
+
+    def get_default_analysis():
+        """Return default analysis when LLM fails"""
         return {
             "summary": "Session completed successfully",
+            "status": "ERROR",
             "key_topics": ["general discussion"],
             "primary_emotions": ["neutral"],
             "mood_score": 5.0,
-            "sentiment_trend": {"overall": "neutral", "progression": "stable"},
-            "breakthrough_moments": None,
+            "breakthrough_moments": "",
             "word_count": len(transcript.split()),
             "engagement_score": 5.0,
             "stress_indicators": []
         }
+    
+    # Retry with exponential backoff
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"🤖 LLM Analysis attempt {attempt + 1}/{max_retries}")
+            
+            client = Cerebras(
+                api_key=os.environ.get("CEREBRAS_API_KEY"),
+            )
+            
+            response = client.chat.completions.create(
+                model="llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {"role": "system", "content": "You are a professional conversation analyzer specializing in therapeutic sessions. When writing summaries, always address the user in SECOND PERSON using 'you' and 'your'. Describe what happened in the conversation naturally without explicitly mentioning 'the assistant' or 'the AI'. Use phrases like 'through the conversation', 'after discussing', 'you explored', 'you discovered', etc. Write as if narrating the user's journey."},
+                    {"role": "user", "content": analysis_prompt}
+                ],
+                temperature=0.3,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "session_analysis",
+                        "strict": True,
+                        "schema": analysis_schema
+                    }
+                }
+            )
+            
+            # Parse the JSON response
+            analysis_text = response.choices[0].message.content
+
+            if not analysis_text or not analysis_text.strip():
+                logger.error("LLM returned empty response")
+                raise ValueError("Empty response from LLM")
+            
+            analysis_data = json.loads(analysis_text.strip())
+            analysis_data["status"] = "COMPLETED"
+            logger.info(f"✅ LLM Analysis successful on attempt {attempt + 1}")
+            return analysis_data
+            
+        except Exception as e:
+            logger.warning(f"⚠️ LLM Analysis attempt {attempt + 1} failed: {e}")
+            
+            # If this is the last attempt, return default
+            if attempt == max_retries - 1:
+                logger.error(f"💥 All {max_retries} LLM attempts failed. Using default analysis.")
+                return get_default_analysis()
+            
+            # Exponential backoff: wait 2^attempt seconds (1s, 2s, 4s, etc.)
+            wait_time = 2 ** attempt
+            logger.info(f"⏳ Waiting {wait_time}s before retry...")
+            await asyncio.sleep(wait_time)
+    
+    # This should never be reached, but just in case
+    return get_default_analysis()
 
 @app.post("/auth/signin")
 async def signin(request: SignInRequest):
@@ -201,10 +277,6 @@ async def signout(current_user: User = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Sign out failed: {str(e)}")
 
-@app.get("/auth/me")
-async def get_me(current_user: User = Depends(get_current_user)):
-    """Get current user info"""
-    return current_user
 
 @app.post("/api/create-session")
 async def create_therapy_session(
@@ -453,56 +525,45 @@ async def receive_session_transcript(webhook_data: SessionTranscriptWebhook):
     
     try:
         # Find session by room name
-        print(f"this is from miso: {webhook_data}")
-        # session = await db.get_session_by_room_name(webhook_data.room_name)
-        # if not session:
-        #     raise HTTPException(status_code=404, detail=f"Session not found for room: {webhook_data.room_name}")
+        session = await db.get_session_by_room_name(webhook_data.room_name)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session not found for room: {webhook_data.room_name}")
         
-        # # Check if session is already completed
-        # if session.status != 'ACTIVE':
-        #     return {"message": "Session already processed", "session_id": session.id, "room_name": webhook_data.room_name}
+        # Check if session is already completed
+        if session.status != 'ACTIVE':
+            return {"message": "Session already processed", "session_id": session.id, "room_name": webhook_data.room_name}
         
-        # print(f"🔄 Processing transcript for room {webhook_data.room_name} (session {session.id})")
-        # print(f"📝 Transcript length: {len(webhook_data.transcript)} characters")
+        print(f"🔄 Processing transcript for room {webhook_data.room_name} (session {session.id})")
+        print(f"📝 Transcript length: {len(webhook_data.transcript)} characters")
         
-        # # Analyze transcript with LLM
-        # analysis_data = await analyze_session_with_llm(
-        #     webhook_data.transcript, 
-        #     webhook_data.duration_seconds
-        # )
+        # Analyze transcript with LLM
+        analysis_data = await analyze_session_with_llm(
+            webhook_data.transcript, 
+            webhook_data.duration_seconds
+        )
         
-        # print(f"🧠 LLM Analysis completed: {analysis_data}")
+        print(f"🧠 LLM Analysis completed: {analysis_data}")
         
-        # # Update session with analysis data
-        # completed_session = await db.complete_session_with_analysis(
-        #     session_id=session.id,
-        #     duration=webhook_data.duration_seconds,
-        #     summary=analysis_data.get('summary', ''),
-        #     key_topics=analysis_data.get('key_topics', []),
-        #     primary_emotions=analysis_data.get('primary_emotions', []),
-        #     mood_score=analysis_data.get('mood_score'),
-        #     sentiment_trend=analysis_data.get('sentiment_trend'),
-        #     breakthrough_moments=analysis_data.get('breakthrough_moments'),
-        #     word_count=analysis_data.get('word_count'),
-        #     engagement_score=analysis_data.get('engagement_score'),
-        #     stress_indicators=analysis_data.get('stress_indicators', [])
-        # )
+        # Update session with analysis data
+        completed_session = await db.complete_session_with_analysis(
+            session_id=session.id,
+            status=analysis_data.get("status", "ERROR"),
+            duration=webhook_data.duration_seconds,
+            summary=analysis_data.get('summary', ''),
+            key_topics=analysis_data.get('key_topics', []),
+            primary_emotions=analysis_data.get('primary_emotions', []),
+            mood_score=analysis_data.get('mood_score'),
+            breakthrough_moments=analysis_data.get('breakthrough_moments',''),
+            word_count=analysis_data.get('word_count'),
+            engagement_score=analysis_data.get('engagement_score'),
+            stress_indicators=analysis_data.get('stress_indicators', [])
+        )
         
-        # print(f"✅ Session {session.id} completed successfully")
+        print(f"✅ Session completed successfully")
         
-        # return {
-        #     "message": "Transcript processed successfully", 
-        #     "session_id": session.id,
-        #     "room_name": webhook_data.room_name,
-        #     "analysis_summary": {
-        #         "mood_score": analysis_data.get('mood_score'),
-        #         "key_topics": analysis_data.get('key_topics', []),
-        #         "engagement_score": analysis_data.get('engagement_score')
-        #     }
-        # }
         return {
-            "status": 200,
-            "message": "Success"
+            "message": "Transcript processed successfully", 
+            "status": 200
         }
         
     except HTTPException:

@@ -12,7 +12,7 @@ import aiohttp
 import os
 
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions, RunContext, ModelSettings, stt, WorkerType
+from livekit.agents import AgentSession, Agent, RoomInputOptions, RunContext, ModelSettings, stt, WorkerType, AutoSubscribe
 from livekit.agents.llm import function_tool, ChatContext, ChatMessage
 from livekit.plugins import (
     openai,
@@ -133,10 +133,15 @@ async def entrypoint(ctx: agents.JobContext):
             
             for item in transcript_data.get('items', []):
                 role = item.get('role', 'unknown')
-                content = item.get('content', '')
-                if role in ['user', 'assistant'] and content.strip():
+                content = item.get('content', [])
+                
+                # Handle content as list
+                if role in ['user', 'assistant'] and content:
                     speaker = "User" if role == 'user' else "Assistant"
-                    transcript_text += f"{speaker}: {content}\n"
+                    # Join list items with space and clean up
+                    content_text = ' '.join(content).strip()
+                    if content_text:
+                        transcript_text += f"{speaker}: {content_text}\n"
             
             # Calculate actual session duration
             duration_seconds = int((datetime.now() - session_start_time).total_seconds())
@@ -172,7 +177,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     await session.start(
         room=ctx.room,
-        agent=Miso(),
+        agent=Miso(ctx.room.name),
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(), 
         ),

@@ -35,13 +35,14 @@ class DatabaseManager:
             except Exception as e:
                 logger.error(f"Error disconnecting from database: {e}")
     
-    async def create_session(self, user_id: str):
+    async def create_session(self, user_id: str, room_name: str):
         """Create a new therapy session with error handling"""
         try:
             await self.connect()
             session = await self.prisma.session.create(
                 data={
                     'user_id': user_id,
+                    'room_name': room_name,
                     'status': 'ACTIVE'
                 }
             )
@@ -112,13 +113,13 @@ class DatabaseManager:
     
     async def complete_session_with_analysis(
         self,
+        status: str,
         session_id: str,
         duration: int,
         summary: str,
         key_topics: List[str],
         primary_emotions: List[str],
         mood_score: float,
-        sentiment_trend: Dict[str, Any] = None,
         breakthrough_moments: str = None,
         word_count: int = None,
         engagement_score: float = None,
@@ -131,14 +132,13 @@ class DatabaseManager:
             session = await self.prisma.session.update(
                 where={'id': session_id},
                 data={
-                    'status': 'COMPLETED',
+                    'status': status or "ERROR",
                     'ended_at': datetime.now(),
                     'duration': duration,
                     'summary': summary,
                     'key_topics': key_topics or [],
                     'primary_emotions': primary_emotions or [],
                     'mood_score': mood_score,
-                    'sentiment_trend': sentiment_trend,
                     'breakthrough_moments': breakthrough_moments,
                     'word_count': word_count,
                     'engagement_score': engagement_score,

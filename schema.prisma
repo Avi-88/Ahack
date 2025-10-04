@@ -32,7 +32,6 @@ model Session {
   key_topics           String[]      @default([])
   primary_emotions     String[]      @default([])
   mood_score           Float?
-  sentiment_trend      Json?
   breakthrough_moments String?
   word_count           Int?
   engagement_score     Float?
