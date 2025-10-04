@@ -7,6 +7,7 @@ from livekit import rtc
 from typing import Optional
 import io
 import wave
+import logging
 
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions, RunContext, ModelSettings, stt, WorkerType
@@ -14,6 +15,7 @@ from livekit.agents.llm import function_tool, ChatContext, ChatMessage
 from livekit.plugins import (
     openai,
     cartesia,
+    inworld,
     deepgram,
     noise_cancellation,
     silero,
@@ -22,11 +24,12 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from utils import DeepgramWrapper
 
-load_dotenv(".env.agent")
+logger = logging.getLogger(__name__)
+load_dotenv(".env.local")
 
 
 class Miso(Agent):
-    def __init__(self, session_id, user_id):
+    def __init__(self):
         super().__init__(
             instructions=
             """You are a compassionate and empathetic mental health assistant. Your goal is to **understand the user’s emotions and provide supportive guidance**, not medical diagnoses or treatment.
@@ -39,8 +42,8 @@ class Miso(Agent):
                 6. **Follow the user’s lead:** Let the user describe their experience in their own words. Tailor responses to their needs without assumptions.  
                 Your responses should always be **empathetic, validating, supportive, and safe**, helping the user process emotions constructively.
             """)
-        self.session_id = session_id
-        self.user_id = user_id
+        # self.session_id = session_id
+        # self.user_id = user_id
         self.db_pool = None
         self.deepgram = DeepgramWrapper()
         self.audio_buffer_list = []
@@ -149,13 +152,12 @@ class Miso(Agent):
 
 
 async def entrypoint(ctx: agents.JobContext):
-    room_metadata = json.loads(ctx.room.metadata)
-    session_id = room_metadata["session_id"]
-    user_id = room_metadata["user_id"]
+
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
         llm=openai.LLM.with_cerebras(model="llama-3.3-70b"),
-        tts=cartesia.TTS(model="sonic-2", voice="694f9389-aac1-45b6-b726-9d9369183238"),
+        tts=inworld.TTS(voice="Wendy"),
+        # tts=cartesia.TTS(model="sonic-2", voice="694f9389-aac1-45b6-b726-9d9369183238"),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
     )
@@ -172,7 +174,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     await session.start(
         room=ctx.room,
-        agent=Miso(session_id, user_id),
+        agent=Miso(),
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(), 
         ),
@@ -186,4 +188,4 @@ async def entrypoint(ctx: agents.JobContext):
 
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint, agent_name="miso", worker_type=WorkerType.PUBLISHER, shutdown_process_timeout=30))
+    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint, worker_type=WorkerType.ROOM, shutdown_process_timeout=30))

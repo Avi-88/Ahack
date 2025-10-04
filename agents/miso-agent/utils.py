@@ -34,8 +34,7 @@ class DeepgramWrapper:
         intents = results.get("intents", {})
         intents_summary = []
         sentiments_summary = []
-
-        print(f"TWF:{results}")
+        
         try:
             # Average sentiment
             avg = sentiments.get("average", {})
@@ -44,14 +43,12 @@ class DeepgramWrapper:
 
             # Extract notable sentiment segments
             for seg in sentiments.get("segments", []):
-                if abs(seg.get('score', 0)) > 0.3:
-                    sentiments_summary.append(f"'{seg['text']}' → {seg['sentiment']}")
+                sentiments_summary.append(f"'{seg['text']}' → {seg['sentiment']}")
 
             # Extract significant intents
             for seg in intents.get("segments", []):
                 for intent in seg.get("intents", []):   
-                    if intent.get("confidence_score", 0) > 0.1:
-                        intents_summary.append(f"'{intent['text']}' → {intent['intent']}")
+                    intents_summary.append(f"'{intent['text']}' → {intent['intent']}")
 
             context_msg = (
                 f"Overall Sentiment: {avg_sentiment} (score: {avg_score})\n"

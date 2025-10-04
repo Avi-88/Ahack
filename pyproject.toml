@@ -12,3 +12,9 @@ dependencies = [
     "supabase",
     "python-dotenv>=1.1.1",
 ]
+
+[tool.uv.workspace]
+members = [
+    "agents/miso",
+    "agents/miso-agent",
+]

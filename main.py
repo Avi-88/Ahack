@@ -32,7 +32,7 @@ app = FastAPI()
 # CORS 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3001"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -143,7 +143,6 @@ async def create_therapy_session(
         "primary_emotions": None
     }
     
-    # 3. Create room in LiveKit server
     await lk_manager.room_service.room.create_room(
         api.CreateRoomRequest(
             name=room_name,
@@ -158,7 +157,7 @@ async def create_therapy_session(
     # 4. Generate access token for user
     token = api.AccessToken(
         api_key=lk_manager.api_key,
-        api_secret=lk_manager.api_secret
+        api_secret=lk_manager.api_secret,
     )
     token.with_identity(current_user.id)\
         .with_name(current_user.name or current_user.email)\
@@ -169,7 +168,7 @@ async def create_therapy_session(
         .with_room_config(
             RoomConfiguration(
                 agents=[
-                    RoomAgentDispatch(agent_name="miso", metadata=json.dumps(room_metadata))
+                    RoomAgentDispatch(agent_name="miso8", metadata=json.dumps(room_metadata))
                 ],
             ),
         )

@@ -2,6 +2,12 @@ version = 1
 revision = 2
 requires-python = ">=3.13"
 
+[manifest]
+members = [
+    "miso",
+    "miso-agent",
+]
+
 [[package]]
 name = "aenum"
 version = "3.1.16"
@@ -778,6 +784,9 @@ deepgram = [
 images = [
     { name = "pillow" },
 ]
+inworld = [
+    { name = "livekit-plugins-inworld" },
+]
 openai = [
     { name = "livekit-plugins-openai" },
 ]
@@ -839,6 +848,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3b/ad/6787aaf04207665a586ca352f8ab67946b500c7a8797a4d1ca428b4e0d72/livekit_plugins_deepgram-1.2.12.tar.gz", hash = "sha256:a9629e6a6a8377b4c36112fbce3b8f0bb42369ebe53b90011c2c5ed4ae3984fa", size = 13409, upload_time = "2025-09-29T04:48:53.408Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/35/56/113c49bb6dda226d463a2ac10822e4990a58b6bcb85f577e8655a9d0052e/livekit_plugins_deepgram-1.2.12-py3-none-any.whl", hash = "sha256:f52a586ebbf304d1665d17c70c3d84671ec51324285cf1f7866d2ef5b35c2363", size = 15517, upload_time = "2025-09-29T04:48:52.429Z" },
+]
+
+[[package]]
+name = "livekit-plugins-inworld"
+version = "1.2.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/ec/12edd5a4c2899c2809cbad80102fda60b86cb32a67a79dbe34d90f58cab5/livekit_plugins_inworld-1.2.12.tar.gz", hash = "sha256:0f05a47c8e7a756a9626e1caf21eb79c9aeb231cc4887fe0c1848056cd7560b9", size = 5973, upload_time = "2025-09-29T04:49:06.875Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/8a/5f24a2a1ed0bf4b5083eb886698bb0a55615155bdd468f62a5ec81a5f16b/livekit_plugins_inworld-1.2.12-py3-none-any.whl", hash = "sha256:4dfd060f39ee7171feb69157bd2ee5bdca57c40ab805c729cbb6b85566162902", size = 6471, upload_time = "2025-09-29T04:49:06.131Z" },
 ]
 
 [[package]]
@@ -1001,6 +1022,25 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.1.1" },
     { name = "supabase" },
     { name = "uvicorn", extras = ["standard"] },
+]
+
+[[package]]
+name = "miso-agent"
+version = "0.1.0"
+source = { virtual = "agents/miso-agent" }
+dependencies = [
+    { name = "deepgram-sdk" },
+    { name = "livekit-agents", extra = ["cartesia", "deepgram", "inworld", "openai", "silero", "turn-detector"] },
+    { name = "livekit-plugins-noise-cancellation" },
+    { name = "python-dotenv" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "deepgram-sdk", specifier = ">=4.8.1" },
+    { name = "livekit-agents", extras = ["cartesia", "deepgram", "inworld", "openai", "silero", "turn-detector"], specifier = "~=1.2" },
+    { name = "livekit-plugins-noise-cancellation", specifier = "~=0.2" },
+    { name = "python-dotenv", specifier = ">=1.1.1" },
 ]
 
 [[package]]
