@@ -120,7 +120,6 @@ async def entrypoint(ctx: agents.JobContext):
         stt=deepgram.STT(model="nova-3", language="multi"),
         llm=openai.LLM.with_cerebras(model="llama-3.3-70b"),
         tts=inworld.TTS(voice="Wendy"),
-        # tts=cartesia.TTS(model="sonic-2", voice="694f9389-aac1-45b6-b726-9d9369183238"),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
     )
@@ -134,26 +133,21 @@ async def entrypoint(ctx: agents.JobContext):
             for item in transcript_data.get('items', []):
                 role = item.get('role', 'unknown')
                 content = item.get('content', [])
-                
-                # Handle content as list
+
                 if role in ['user', 'assistant'] and content:
                     speaker = "User" if role == 'user' else "Assistant"
-                    # Join list items with space and clean up
                     content_text = ' '.join(content).strip()
                     if content_text:
                         transcript_text += f"{speaker}: {content_text}\n"
             
-            # Calculate actual session duration
             duration_seconds = int((datetime.now() - session_start_time).total_seconds())
             
-            # Prepare webhook payload
             webhook_payload = {
                 "room_name": ctx.room.name,
                 "transcript": transcript_text,
                 "duration_seconds": duration_seconds
             }
             
-            # Send to webhook endpoint
             webhook_url = f"{os.getenv('BACKEND_SERVER_BASE_URL', 'http://localhost:8000')}/webhooks/session-transcript"
             
             async with aiohttp.ClientSession() as client_session:
@@ -164,13 +158,13 @@ async def entrypoint(ctx: agents.JobContext):
                 ) as response:
                     if response.status == 200:
                         result = await response.json()
-                        print(f"✅ Transcript sent for room {ctx.room.name}")
+                        print(f"Transcript sent for room {ctx.room.name}")
                     else:
                         error_text = await response.text()
-                        print(f"❌ Failed to send transcript. Status: {response.status}, Error: {error_text}")
+                        print(f"Failed to send transcript. Status: {response.status}, Error: {error_text}")
             
         except Exception as e:
-            print(f"💥 Error in end_session_hook: {e}")
+            print(f"Error in end_session_hook: {e}")
             import traceback
             traceback.print_exc()
 

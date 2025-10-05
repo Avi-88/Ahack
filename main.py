@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Response
+from fastapi import FastAPI, HTTPException, Depends, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from livekit import api
 from livekit.api import RoomConfiguration, RoomAgentDispatch
@@ -266,6 +266,56 @@ async def signin(request: SignInRequest):
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
 
+@app.post("/auth/refresh")
+async def refresh_token(request: Request, response: Response):
+    """Refresh access token using HTTP-only refresh token"""
+    try:
+        # Get refresh token from HTTP-only cookie
+        refresh_token = request.cookies.get("refresh_token")
+        
+        if not refresh_token:
+            raise HTTPException(status_code=401, detail="No refresh token found")
+        
+        # Use Supabase to refresh the session
+        auth_response = supabase.auth.refresh_session(refresh_token)
+        
+        if not auth_response.session:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+        
+        session = auth_response.session
+        user = auth_response.user
+        
+        # Set new HTTP-only cookies
+        response.set_cookie(
+            key="access_token",
+            value=session.access_token,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            max_age=3600  # 1 hour
+        )
+        
+        response.set_cookie(
+            key="refresh_token", 
+            value=session.refresh_token,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            max_age=604800  # 7 days
+        )
+        
+        return {
+            "message": "Token refreshed successfully",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "username": user.user_metadata.get('username', user.email.split('@')[0])
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Token refresh failed: {str(e)}")
+
 @app.post("/auth/signup")  
 async def signup(request: SignUpRequest):
     """Sign up new user with email and password"""
@@ -341,7 +391,7 @@ async def create_therapy_session(
 
     room_metadata = {
         "user_id": current_user.id,
-        "user_name": current_user.name or current_user.email,
+        "user_name": current_user.user_metadata.get('username', current_user.email.split('@')[0]),
         "session_id": session.id,
         "summary": None,
         "key_topics": None,
@@ -404,7 +454,7 @@ async def resume_therapy_session(
             max_participants=2,
             metadata=json.dumps({
                 "user_id": current_user.id,
-                "user_name": current_user.name or current_user.email,
+                "user_name": current_user.user_metadata.get('username', current_user.email.split('@')[0]),
                 "session_id": session_id,
                 "summary": previous_session.summary,
                 "key_topics": previous_session.key_topics,
@@ -438,38 +488,6 @@ async def resume_therapy_session(
         "session_id": previous_session.id,
     }
 
-@app.get("/api/analytics/mood-trends")
-async def get_mood_trends(
-    days: int = 90,
-    current_user: User = Depends(get_current_user)
-):
-    """Get user's mood trends over time"""
-    mood_data = await db.get_mood_trends(current_user.id, days)
-    return {"mood_trends": mood_data}
-
-@app.get("/api/analytics/topics")
-async def get_topic_analysis(
-    days: int = 30,
-    current_user: User = Depends(get_current_user)
-):
-    """Get frequency analysis of discussed topics"""
-    topic_data = await db.get_topic_frequency(current_user.id, days)
-    
-    # Aggregate topic frequencies
-    topic_counts = {}
-    goal_counts = {}
-    
-    for session in topic_data:
-        for topic in session.key_topics:
-            topic_counts[topic] = topic_counts.get(topic, 0) + 1
-        for goal in session.therapeutic_goals:
-            goal_counts[goal] = goal_counts.get(goal, 0) + 1
-    
-    return {
-        "topics": topic_counts,
-        "therapeutic_goals": goal_counts,
-        "session_count": len(topic_data)
-    }
 
 @app.get("/api/analytics/progress")
 async def get_progress_insights(current_user: User = Depends(get_current_user)):
