@@ -112,6 +112,22 @@ class DatabaseManager:
             logger.error(f"Unexpected error getting session by room name {room_name}: {e}")
             raise
     
+    async def delete_session(self, session_id: str):
+        """Delete a session by ID"""
+        try:
+            await self.connect()
+            session = await self.prisma.session.delete(
+                where={'id': session_id}
+            )
+            logger.info(f"Session {session_id} deleted successfully")
+            return session
+        except PrismaError as e:
+            logger.error(f"Database error deleting session {session_id}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error deleting session {session_id}: {e}")
+            raise
+    
     async def complete_session_with_analysis(
         self,
         status: str,

@@ -31,30 +31,64 @@ load_dotenv(".env.local")
 
 
 class Miso(Agent):
-    def __init__(self, room_name):
-        super().__init__(
-            instructions=
-            """You are a compassionate and empathetic mental health assistant. Your goal is to **understand the user’s emotions and provide supportive guidance**, not medical diagnoses or treatment.
+    def __init__(self, room_name, room_metadata=None):
+        # system prompt
+        base_instructions = """You are a compassionate and empathetic mental health assistant. Your goal is to **understand the user's emotions and provide supportive guidance**, not medical diagnoses or treatment.
                 Guidelines:
-                1. **Recognize emotions:** Identify the user’s feelings, tone, and sentiment (e.g., sadness, anxiety, stress, frustration, loneliness).  
-                2. **Respond with empathy:** Validate and acknowledge their emotions. Use warm, understanding, and patient language. Example: “It sounds like you’re feeling overwhelmed, and that’s understandable.”  
+                1. **Recognize emotions:** Identify the user's feelings, tone, and sentiment (e.g., sadness, anxiety, stress, frustration, loneliness).  
+                2. **Respond with empathy:** Validate and acknowledge their emotions. Use warm, understanding, and patient language. Example: "It sounds like you're feeling overwhelmed, and that's understandable."  
                 3. **Provide safe guidance:** Offer general coping strategies like deep breathing, mindfulness, journaling, talking to someone trusted, or grounding exercises. Focus on helping the user navigate their feelings safely.  
                 4. **Never diagnose or prescribe:** Do not give medical advice, clinical diagnoses, or treatment suggestions.  
-                5. **Encourage support when needed:** Suggest seeking professional help if appropriate, phrased gently: “Talking to a trained professional can sometimes help when feelings are intense.”  
-                6. **Follow the user’s lead:** Let the user describe their experience in their own words. Tailor responses to their needs without assumptions.  
-                Your responses should always be **empathetic, validating, supportive, and safe**, helping the user process emotions constructively.
-            """)
+                5. **Encourage support when needed:** Suggest seeking professional help if appropriate, phrased gently: "Talking to a trained professional can sometimes help when feelings are intense."  
+                6. **Follow the user's lead:** Let the user describe their experience in their own words. Tailor responses to their needs without assumptions.  
+                Your responses should always be **empathetic, validating, supportive, and safe**, helping the user process emotions constructively."""
+
+        # Add context from room metadata if available
+        context_instructions = self._build_context_instructions(room_metadata)
+        full_instructions = base_instructions + context_instructions
+
+        super().__init__(instructions=full_instructions)
 
         self.room_name = room_name
+        self.room_metadata = room_metadata
         self.db_pool = None
         self.deepgram = DeepgramWrapper()
         self.audio_buffer_list = []
         self.audio_file = None
 
+    def _build_context_instructions(self, room_metadata):
+        """Building context-specific instructions from room metadata"""
+        if not room_metadata:
+            return ""
 
-    async def setup(self):
-        database_url = os.getenv("DATABASE_URL")
-        self.db_pool = await asyncpg.create_pool(database_url)
+        context_parts = []
+        
+        if room_metadata.get('user_name'):
+            context_parts.append(f"\n\nUser Context: You are speaking with {room_metadata['user_name']}.")
+
+        if room_metadata.get('summary'):
+            context_parts.append(f"\nPrevious Session Summary: {room_metadata['summary']}")
+
+        if room_metadata.get('key_topics'):
+            if isinstance(room_metadata['key_topics'], list):
+                topics = ', '.join(room_metadata['key_topics'])
+            else:
+                topics = str(room_metadata['key_topics'])
+            context_parts.append(f"\nKey Topics Previously Discussed: {topics}")
+
+        if room_metadata.get('primary_emotions'):
+            if isinstance(room_metadata['primary_emotions'], list):
+                emotions = ', '.join(room_metadata['primary_emotions'])
+            else:
+                emotions = str(room_metadata['primary_emotions'])
+            context_parts.append(f"\nPrimary Emotions from Previous Sessions: {emotions}")
+
+        if context_parts:
+            context_parts.append(f"\nImportant: Use this context to provide continuity and personalized support. Reference previous discussions naturally when relevant, but don't force connections. Allow the user to guide the conversation while being aware of their history.")
+
+        return ''.join(context_parts)
+
+
         
 
     async def stt_node(
@@ -110,8 +144,16 @@ class Miso(Agent):
 async def entrypoint(ctx: agents.JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
-
-    print(f"Room data:{ctx.room.metadata}")
+    
+    # Parse room metadata for context
+    room_metadata = None
+    if ctx.room.metadata:
+        try:
+            room_metadata = json.loads(ctx.room.metadata)
+            print(f"Parsed metadata: {room_metadata}")
+        except json.JSONDecodeError as e:
+            print(f"Failed to parse room metadata: {e}")
+            room_metadata = None
     
     # Store session start time
     session_start_time = datetime.now()
@@ -171,7 +213,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     await session.start(
         room=ctx.room,
-        agent=Miso(ctx.room.name),
+        agent=Miso(ctx.room.name, room_metadata),
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(), 
         ),

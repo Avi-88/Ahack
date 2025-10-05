@@ -30,10 +30,8 @@ async def get_current_user(request: Request) -> User:
     Extract user from HTTP-only cookie or Authorization header
     """
     try:
-        # Try to get token from HTTP-only cookie first (more secure)
         token = request.cookies.get("access_token")
         
-        # Fallback to Authorization header for API compatibility
         if not token:
             auth_header = request.headers.get("Authorization")
             if auth_header and auth_header.startswith("Bearer "):
@@ -45,7 +43,6 @@ async def get_current_user(request: Request) -> User:
                 detail="No authentication token found"
             )
         
-        # Verify token with Supabase
         response = supabase.auth.get_user(token)
         
         if not response.user:
@@ -55,12 +52,11 @@ async def get_current_user(request: Request) -> User:
             )
         
         user_data = response.user
-        
-        # Create user object
+
         user = User(
             id=user_data.id,
             email=user_data.email,
-            name=user_data.user_metadata.get('name', user_data.email.split('@')[0]),
+            name=user_data.user_metadata.get('username', user_data.email.split('@')[0]),
             avatar_url=user_data.user_metadata.get('avatar_url')
         )
         

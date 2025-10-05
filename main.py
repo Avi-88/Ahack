@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 class CreateSessionRequest(BaseModel):
     session_id: Optional[str] = None
 
+class ResumeSessionRequest(BaseModel):
+    session_id: str
+
+class DeleteSessionRequest(BaseModel):
+    session_id: str
+
 class SignInRequest(BaseModel):
     email: str
     password: str
@@ -40,10 +46,10 @@ app = FastAPI()
 # CORS 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=True,  # Required for HTTP-only cookies
+    allow_credentials=True,
 )
 
 class LiveKitManager:
@@ -391,7 +397,7 @@ async def create_therapy_session(
 
     room_metadata = {
         "user_id": current_user.id,
-        "user_name": current_user.user_metadata.get('username', current_user.email.split('@')[0]),
+        "user_name": current_user.name,
         "session_id": session.id,
         "summary": None,
         "key_topics": None,
@@ -436,15 +442,25 @@ async def create_therapy_session(
 
 @app.post("/api/resume-session")
 async def resume_therapy_session(
-    session_id: str,
+    request: ResumeSessionRequest,
     current_user: User = Depends(get_current_user)
 ):
     """Resume therapy with context from previous session"""
-    
+    session_id = request.session_id
+    print(f"this is it:{session_id}")
     # Get previous session data
     previous_session = await db.get_session_by_id(session_id)
     if not previous_session or previous_session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    room_metadata = {
+        "user_id": current_user.id,
+        "user_name": current_user.name,
+        "session_id": session_id,
+        "summary": previous_session.summary,
+        "key_topics": previous_session.key_topics,
+        "primary_emotions": previous_session.primary_emotions
+    }
     
     # Create room with previous session context but same room name ( rooms are ephemeral )
     await lk_manager.room_service.room.create_room(
@@ -452,14 +468,7 @@ async def resume_therapy_session(
             name=previous_session.room_name,
             empty_timeout=300,
             max_participants=2,
-            metadata=json.dumps({
-                "user_id": current_user.id,
-                "user_name": current_user.user_metadata.get('username', current_user.email.split('@')[0]),
-                "session_id": session_id,
-                "summary": previous_session.summary,
-                "key_topics": previous_session.key_topics,
-                "primary_emotions": previous_session.primary_emotions
-            })
+            metadata=json.dumps(room_metadata)
         )
     )
     
@@ -472,7 +481,7 @@ async def resume_therapy_session(
          .with_name(current_user.name or current_user.email)\
          .with_grants(api.VideoGrants(
              room_join=True,
-             room=room_name
+             room=previous_session.room_name
          ))\
          .with_room_config(
             RoomConfiguration(
@@ -483,10 +492,41 @@ async def resume_therapy_session(
         )
     
     return {
-        "room_name": room_name,
+        "room_name": previous_session.room_name,
         "token": token.to_jwt(),
         "session_id": previous_session.id,
     }
+
+
+@app.delete("/api/delete-session")
+async def delete_therapy_session(
+    request: DeleteSessionRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a therapy session"""
+    try:
+        session_id = request.session_id
+        
+        # Get session and verify ownership
+        session = await db.get_session_by_id(session_id)
+        if not session or session.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Delete the session
+        deleted_session = await db.delete_session(session_id)
+        if not deleted_session:
+            raise HTTPException(status_code=500, detail="Failed to delete session")
+        
+        return {
+            "message": "Session deleted successfully",
+            "session_id": session_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error deleting session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
 
 
 @app.get("/api/analytics/progress")
@@ -549,8 +589,8 @@ async def receive_session_transcript(webhook_data: SessionTranscriptWebhook):
         if not session:
             raise HTTPException(status_code=404, detail=f"Session not found for room: {webhook_data.room_name}")
         
-        # Check if session is already completed
-        if session.status != 'ACTIVE':
+        # Check if session is not terminated 
+        if session.status != 'ACTIVE' and session.status != 'COMPLETED':
             return {"message": "Session already processed", "session_id": session.id, "room_name": webhook_data.room_name}
 
         # Analyze transcript with LLM
@@ -600,7 +640,7 @@ async def receive_session_transcript(webhook_data: SessionTranscriptWebhook):
                     }
                 )
         except:
-            pass  # Don't fail the webhook if status update fails
+            pass 
             
         raise HTTPException(
             status_code=500, 
@@ -640,7 +680,7 @@ async def fetch_session_details(
     
     return {"status": 200, "session": session}
 
-# Startup/shutdown events
+
 @app.on_event("startup")
 async def startup():
     await db.connect()
