@@ -7,8 +7,6 @@ import json
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
-
-# Import our modules
 from auth import get_current_user, User, supabase
 from database import db
 from pydantic import BaseModel
@@ -30,7 +28,7 @@ class SignInRequest(BaseModel):
 class SignUpRequest(BaseModel):
     email: str
     password: str
-    name: Optional[str] = None
+    username: str
 
 class SessionTranscriptWebhook(BaseModel):
     room_name: str
@@ -42,7 +40,7 @@ app = FastAPI()
 # CORS 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001"],
+    allow_origins=["http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -60,8 +58,6 @@ class LiveKitManager:
         )
 
 lk_manager = LiveKitManager()
-
-# Initialize Cerebras client
 
 
 async def analyze_session_with_llm(transcript: str, duration_seconds: int, max_retries: int = 3) -> dict:
@@ -82,6 +78,7 @@ async def analyze_session_with_llm(transcript: str, duration_seconds: int, max_r
         Through the conversation, you received empathetic support and practical advice, 
         helping you to reframe your approach and feel more in control."
         Use natural language like "through the conversation", "after discussing", "you explored", etc.
+        - title: Short 3-5 word title for the session based on topics discussed
         - mood_score: 1-10 scale (1=very negative, 10=very positive)
         - engagement_score: 1-10 scale (1=very disengaged, 10=highly engaged)
         - key_topics: 3-5 main themes discussed
@@ -98,6 +95,10 @@ async def analyze_session_with_llm(transcript: str, duration_seconds: int, max_r
     analysis_schema = {
         "type": "object",
         "properties": {
+            "title": {
+                "type": "string",
+                "description": "Short 3-5 word title for the session based on topics discussed"
+            },
             "summary": {
                 "type": "string",
                 "description": "Brief 5-6 sentence summary of the session"
@@ -135,6 +136,7 @@ async def analyze_session_with_llm(transcript: str, duration_seconds: int, max_r
             }
         },
         "required": [
+            "title",
             "summary",
             "key_topics",
             "primary_emotions",
@@ -149,6 +151,7 @@ async def analyze_session_with_llm(transcript: str, duration_seconds: int, max_r
     def get_default_analysis():
         """Return default analysis when LLM fails"""
         return {
+            "title": int(datetime.now()),
             "summary": "Session completed successfully",
             "status": "ERROR",
             "key_topics": ["general discussion"],
@@ -195,23 +198,22 @@ async def analyze_session_with_llm(transcript: str, duration_seconds: int, max_r
             
             analysis_data = json.loads(analysis_text.strip())
             analysis_data["status"] = "COMPLETED"
-            logger.info(f"✅ LLM Analysis successful on attempt {attempt + 1}")
+            logger.info(f"LLM Analysis successful on attempt {attempt + 1}")
             return analysis_data
             
         except Exception as e:
-            logger.warning(f"⚠️ LLM Analysis attempt {attempt + 1} failed: {e}")
+            logger.warning(f"LLM Analysis attempt {attempt + 1} failed: {e}")
             
             # If this is the last attempt, return default
             if attempt == max_retries - 1:
-                logger.error(f"💥 All {max_retries} LLM attempts failed. Using default analysis.")
+                logger.error(f"All {max_retries} LLM attempts failed. Using default analysis.")
                 return get_default_analysis()
             
             # Exponential backoff: wait 2^attempt seconds (1s, 2s, 4s, etc.)
             wait_time = 2 ** attempt
-            logger.info(f"⏳ Waiting {wait_time}s before retry...")
+            logger.info(f"Waiting {wait_time}s before retry...")
             await asyncio.sleep(wait_time)
     
-    # This should never be reached, but just in case
     return get_default_analysis()
 
 @app.post("/auth/signin")
@@ -230,7 +232,7 @@ async def signin(request: SignInRequest):
                 "user": {
                     "id": response.user.id,
                     "email": response.user.email,
-                    "name": response.user.user_metadata.get('name', response.user.email.split('@')[0])
+                    "username": response.user.user_metadata.get('username', response.user.email.split('@')[0])
                 }
             }
         else:
@@ -248,7 +250,7 @@ async def signup(request: SignUpRequest):
             "password": request.password,
             "options": {
                 "data": {
-                    "name": request.name or request.email.split('@')[0]
+                    "username": request.username or request.email.split('@')[0]
                 }
             }
         })
@@ -259,13 +261,14 @@ async def signup(request: SignUpRequest):
                 "user": {
                     "id": response.user.id,
                     "email": response.user.email,
-                    "name": request.name or request.email.split('@')[0]
+                    "username": request.username or request.email.split('@')[0]
                 }
             }
         else:
             raise HTTPException(status_code=400, detail="Failed to create user")
             
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=400, detail=f"Registration failed: {str(e)}")
 
 @app.post("/auth/signout")
@@ -284,11 +287,13 @@ async def create_therapy_session(
 ):
     """Called by frontend to start therapy session"""
     print(current_user)
-    # 1. Create unique room name
+    # Create unique room name
     room_name = f"emotional_guidance_{current_user.id}_{int(datetime.now().timestamp())}"
-    # 2. Save to database using Prisma
+    title = datetime.today().strftime('%Y-%m-%d')
+    # Save to database using Prisma
     session = await db.create_session(
         user_id=current_user.id,
+        title=title,
         room_name=room_name,
     )
     if not session:
@@ -311,10 +316,8 @@ async def create_therapy_session(
             metadata=json.dumps(room_metadata)
         )
     )
-    
 
-    
-    # 4. Generate access token for user
+    # Generate access token for user
     token = api.AccessToken(
         api_key=lk_manager.api_key,
         api_secret=lk_manager.api_secret,
@@ -328,7 +331,7 @@ async def create_therapy_session(
         .with_room_config(
             RoomConfiguration(
                 agents=[
-                    RoomAgentDispatch(agent_name="miso8", metadata=json.dumps(room_metadata))
+                    RoomAgentDispatch(agent_name="miso", metadata=json.dumps(room_metadata))
                 ],
             ),
         )
@@ -340,11 +343,6 @@ async def create_therapy_session(
         "session_id": session.id 
     }
 
-@app.get("/api/session-history")
-async def get_user_sessions(current_user: User = Depends(get_current_user)):
-    """Get user's therapy history"""
-    sessions = await db.get_user_sessions(current_user.id)
-    return {"sessions": sessions}
 
 @app.post("/api/resume-session")
 async def resume_therapy_session(
@@ -353,18 +351,15 @@ async def resume_therapy_session(
 ):
     """Resume therapy with context from previous session"""
     
-    # 1. Get previous session data
+    # Get previous session data
     previous_session = await db.get_session_by_id(session_id)
     if not previous_session or previous_session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # 2. Create new room for resumed conversation
-    room_name = f"emotional_guidance_{current_user.id}_{int(datetime.now().timestamp())}_resume"
-    
-    # 3. Create room with previous session context
+    # Create room with previous session context but same room name ( rooms are ephemeral )
     await lk_manager.room_service.room.create_room(
         api.CreateRoomRequest(
-            name=room_name,
+            name=previous_session.room_name,
             empty_timeout=300,
             max_participants=2,
             metadata=json.dumps({
@@ -378,7 +373,7 @@ async def resume_therapy_session(
         )
     )
     
-    # 5. Generate access token
+    # Generate access token
     token = api.AccessToken(
         api_key=lk_manager.api_key,
         api_secret=lk_manager.api_secret
@@ -485,39 +480,6 @@ async def get_progress_insights(current_user: User = Depends(get_current_user)):
         "recent_sessions": recent_sessions
     }
 
-@app.post("/api/sessions/{session_id}/complete")
-async def complete_session_analysis(
-    session_id: str,
-    analysis_data: dict,
-    current_user: User = Depends(get_current_user)
-):
-    """Complete a session with analysis data (called by agent)"""
-    
-    # Verify session belongs to user
-    session = await db.get_session_by_id(session_id)
-    if not session or session.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    # Complete session with analysis
-    completed_session = await db.complete_session_with_analysis(
-        session_id=session_id,
-        duration=analysis_data.get('duration', 0),
-        summary=analysis_data.get('summary', ''),
-        key_topics=analysis_data.get('key_topics', []),
-        primary_emotions=analysis_data.get('primary_emotions', []),
-        mood_score=analysis_data.get('mood_score'),
-        sentiment_trend=analysis_data.get('sentiment_trend'),
-        therapeutic_goals=analysis_data.get('therapeutic_goals', []),
-        coping_strategies=analysis_data.get('coping_strategies', []),
-        breakthrough_moments=analysis_data.get('breakthrough_moments'),
-        homework_assigned=analysis_data.get('homework_assigned'),
-        progress_notes=analysis_data.get('progress_notes'),
-        word_count=analysis_data.get('word_count'),
-        engagement_score=analysis_data.get('engagement_score'),
-        stress_indicators=analysis_data.get('stress_indicators', [])
-    )
-    
-    return {"message": "Session completed successfully", "session": completed_session}
 
 @app.post("/webhooks/session-transcript")
 async def receive_session_transcript(webhook_data: SessionTranscriptWebhook):
@@ -532,21 +494,19 @@ async def receive_session_transcript(webhook_data: SessionTranscriptWebhook):
         # Check if session is already completed
         if session.status != 'ACTIVE':
             return {"message": "Session already processed", "session_id": session.id, "room_name": webhook_data.room_name}
-        
-        print(f"🔄 Processing transcript for room {webhook_data.room_name} (session {session.id})")
-        print(f"📝 Transcript length: {len(webhook_data.transcript)} characters")
-        
+
         # Analyze transcript with LLM
         analysis_data = await analyze_session_with_llm(
             webhook_data.transcript, 
             webhook_data.duration_seconds
         )
         
-        print(f"🧠 LLM Analysis completed: {analysis_data}")
+        print(f"LLM Analysis completed: {analysis_data}")
         
         # Update session with analysis data
         completed_session = await db.complete_session_with_analysis(
             session_id=session.id,
+            title=analysis_data.get('title'),
             status=analysis_data.get("status", "ERROR"),
             duration=webhook_data.duration_seconds,
             summary=analysis_data.get('summary', ''),
@@ -559,7 +519,7 @@ async def receive_session_transcript(webhook_data: SessionTranscriptWebhook):
             stress_indicators=analysis_data.get('stress_indicators', [])
         )
         
-        print(f"✅ Session completed successfully")
+        print(f"Session completed successfully")
         
         return {
             "message": "Transcript processed successfully", 
@@ -569,7 +529,7 @@ async def receive_session_transcript(webhook_data: SessionTranscriptWebhook):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"💥 Error processing transcript webhook: {e}")
+        print(f"Error processing transcript webhook: {e}")
         
         # Mark session as ERROR if processing fails
         try:
@@ -588,6 +548,39 @@ async def receive_session_transcript(webhook_data: SessionTranscriptWebhook):
             status_code=500, 
             detail=f"Failed to process transcript: {str(e)}"
         )
+
+@app.get("/api/user-sessions")
+async def get_user_sessions(
+    page: int = 1,
+    page_size: int = 10,
+    current_user: User = Depends(get_current_user),
+):
+    """Get sessions for the current user grouped by month with pagination"""
+    try:
+        sessions = await db.get_user_sessions_grouped_by_month(
+            user_id=current_user.id,
+            page=page,
+            page_size=page_size
+        )
+        return sessions
+    except Exception as e:
+        print(f"Error getting user sessions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve sessions")
+
+
+@app.get("/api/sessions/{session_id}")
+async def fetch_session_details(
+    session_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get session data by id"""
+    
+    # Verify session belongs to user
+    session = await db.get_session_by_id(session_id)
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Unauthorized Session access")
+    
+    return {"status": 200, "session": session}
 
 # Startup/shutdown events
 @app.on_event("startup")

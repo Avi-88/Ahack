@@ -9,9 +9,9 @@ datasource db {
 }
 
 model User {
-  id         String    @id @default(cuid())
+  id         String    @id @db.Uuid
   email      String    @unique
-  name       String?
+  username   String?
   avatar_url String?
   created_at DateTime  @default(now())
   updated_at DateTime  @default(now()) @updatedAt
@@ -22,8 +22,9 @@ model User {
 
 model Session {
   id                   String        @id @default(cuid())
-  user_id              String
+  user_id              String        @db.Uuid
   room_name            String
+  title                String
   status               SessionStatus @default(ACTIVE)
   started_at           DateTime      @default(now())
   ended_at             DateTime?

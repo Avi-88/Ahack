@@ -35,13 +35,14 @@ class DatabaseManager:
             except Exception as e:
                 logger.error(f"Error disconnecting from database: {e}")
     
-    async def create_session(self, user_id: str, room_name: str):
+    async def create_session(self, user_id: str, room_name: str, title: str):
         """Create a new therapy session with error handling"""
         try:
             await self.connect()
             session = await self.prisma.session.create(
                 data={
                     'user_id': user_id,
+                    'title': title,
                     'room_name': room_name,
                     'status': 'ACTIVE'
                 }
@@ -114,6 +115,7 @@ class DatabaseManager:
     async def complete_session_with_analysis(
         self,
         status: str,
+        title: str,
         session_id: str,
         duration: int,
         summary: str,
@@ -132,6 +134,7 @@ class DatabaseManager:
             session = await self.prisma.session.update(
                 where={'id': session_id},
                 data={
+                    'title': title,
                     'status': status or "ERROR",
                     'ended_at': datetime.now(),
                     'duration': duration,
@@ -260,6 +263,80 @@ class DatabaseManager:
             'all_sessions': all_sessions,
             'recent_sessions': recent_sessions
         }
+    
+    async def get_user_sessions_grouped_by_month(self, user_id: str, page: int = 1, page_size: int = 10):
+        """Get user sessions grouped by month with pagination"""
+        try:
+            await self.connect()
+            
+            # Calculate offset for pagination
+            offset = (page - 1) * page_size
+            
+            # Get total count for pagination metadata
+            total_sessions = await self.prisma.session.count(
+                where={'user_id': user_id}
+            )
+            
+            # Get sessions with pagination
+            sessions = await self.prisma.session.find_many(
+                where={'user_id': user_id},
+                order={'started_at': 'desc'},
+                skip=offset,
+                take=page_size
+            )
+            
+            # Group sessions by month
+            grouped_sessions = {}
+            for session in sessions:
+                # Format: "2024-01" for January 2024
+                month_key = session.started_at.strftime("%Y-%m")
+                month_name = session.started_at.strftime("%B %Y")  # "January 2024"
+                
+                if month_key not in grouped_sessions:
+                    grouped_sessions[month_key] = {
+                        'month_name': month_name,
+                        'month_key': month_key,
+                        'sessions': []
+                    }
+                
+                grouped_sessions[month_key]['sessions'].append({
+                    'id': session.id,
+                    'title': session.title or f"Session {session.started_at.strftime('%d %b')}",
+                    'started_at': session.started_at.isoformat(),
+                    'status': session.status,
+                    'mood_score': session.mood_score,
+                    'duration': session.duration
+                })
+            
+            # Convert to list and sort by month (newest first)
+            grouped_list = list(grouped_sessions.values())
+            grouped_list.sort(key=lambda x: x['month_key'], reverse=True)
+            
+            # Calculate pagination metadata
+            total_pages = (total_sessions + page_size - 1) // page_size
+            has_next = page < total_pages
+            has_prev = page > 1
+            
+            logger.info(f"Retrieved {len(sessions)} sessions for user {user_id}, grouped into {len(grouped_list)} months")
+            
+            return {
+                'sessions_by_month': grouped_list,
+                'pagination': {
+                    'current_page': page,
+                    'page_size': page_size,
+                    'total_sessions': total_sessions,
+                    'total_pages': total_pages,
+                    'has_next': has_next,
+                    'has_prev': has_prev
+                }
+            }
+            
+        except PrismaError as e:
+            logger.error(f"Database error getting grouped sessions for user {user_id}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error getting grouped sessions for user {user_id}: {e}")
+            raise
 
 # Global database instance
 db = DatabaseManager()
