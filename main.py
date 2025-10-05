@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from livekit import api
 from livekit.api import RoomConfiguration, RoomAgentDispatch
@@ -43,6 +43,7 @@ app.add_middleware(
     allow_origins=["http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,  # Required for HTTP-only cookies
 )
 
 class LiveKitManager:
@@ -226,15 +227,39 @@ async def signin(request: SignInRequest):
         })
         
         if response.user:
-            return {
-                "access_token": response.session.access_token,
-                "refresh_token": response.session.refresh_token,
+            # Create response with user data
+            user_data = {
                 "user": {
                     "id": response.user.id,
                     "email": response.user.email,
                     "username": response.user.user_metadata.get('username', response.user.email.split('@')[0])
                 }
             }
+            
+            # Create HTTP response
+            from fastapi import Response
+            response_obj = Response(content=json.dumps(user_data))
+            
+            # Set HTTP-only cookies for tokens
+            response_obj.set_cookie(
+                key="access_token",
+                value=response.session.access_token,
+                httponly=True,  # Cannot be accessed by JavaScript
+                secure=True,    # Only sent over HTTPS
+                samesite="strict",  # CSRF protection
+                max_age=3600    # 1 hour expiration
+            )
+            
+            response_obj.set_cookie(
+                key="refresh_token", 
+                value=response.session.refresh_token,
+                httponly=True,
+                secure=True,
+                samesite="strict",
+                max_age=604800  # 7 days expiration
+            )
+            
+            return response_obj
         else:
             raise HTTPException(status_code=401, detail="Invalid credentials")
             
@@ -272,10 +297,25 @@ async def signup(request: SignUpRequest):
         raise HTTPException(status_code=400, detail=f"Registration failed: {str(e)}")
 
 @app.post("/auth/signout")
-async def signout(current_user: User = Depends(get_current_user)):
+async def signout(response: Response, current_user: User = Depends(get_current_user)):
     """Sign out current user"""
     try:
         supabase.auth.sign_out()
+        
+        # Clear HTTP-only cookies
+        response.delete_cookie(
+            key="access_token",
+            httponly=True,
+            secure=True,
+            samesite="strict"
+        )
+        response.delete_cookie(
+            key="refresh_token", 
+            httponly=True,
+            secure=True,
+            samesite="strict"
+        )
+        
         return {"message": "Successfully signed out"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Sign out failed: {str(e)}")

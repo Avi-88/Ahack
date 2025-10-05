@@ -1,4 +1,4 @@
-from fastapi import HTTPException, Depends
+from fastapi import HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
 import jwt
@@ -25,12 +25,25 @@ class User(BaseModel):
     name: Optional[str] = None
     avatar_url: Optional[str] = None
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
+async def get_current_user(request: Request) -> User:
     """
-    Extract user from Supabase JWT token
+    Extract user from HTTP-only cookie or Authorization header
     """
     try:
-        token = credentials.credentials
+        # Try to get token from HTTP-only cookie first (more secure)
+        token = request.cookies.get("access_token")
+        
+        # Fallback to Authorization header for API compatibility
+        if not token:
+            auth_header = request.headers.get("Authorization")
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.split(" ")[1]
+        
+        if not token:
+            raise HTTPException(
+                status_code=401,
+                detail="No authentication token found"
+            )
         
         # Verify token with Supabase
         response = supabase.auth.get_user(token)
@@ -53,8 +66,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         
         return user
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Failed to get current user")
+        logger.error(f"Failed to get current user: {str(e)}")
         raise HTTPException(
             status_code=401,
             detail=f"Authentication failed: {str(e)}"
