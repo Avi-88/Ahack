@@ -46,7 +46,7 @@ app = FastAPI()
 # CORS 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["miso-client.vercel.app"],
+    allow_origins=["https://miso-client.vercel.app", "http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
