@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from deepgram import DeepgramClient, PrerecordedOptions, FileSource
 
-load_dotenv()
+load_dotenv(".env.local")
 
 class DeepgramWrapper:
     def __init__(self):
