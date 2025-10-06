@@ -252,7 +252,7 @@ async def signin(request: SignInRequest):
                 value=response.session.access_token,
                 httponly=True,  # Cannot be accessed by JavaScript
                 secure=True,    # Only sent over HTTPS
-                samesite="strict",  # CSRF protection
+                samesite="none",  # CSRF protection
                 max_age=3600    # 1 hour expiration
             )
             
@@ -261,7 +261,7 @@ async def signin(request: SignInRequest):
                 value=response.session.refresh_token,
                 httponly=True,
                 secure=True,
-                samesite="strict",
+                samesite="none",
                 max_age=604800  # 7 days expiration
             )
             
@@ -297,7 +297,7 @@ async def refresh_token(request: Request, response: Response):
             value=session.access_token,
             httponly=True,
             secure=True,
-            samesite="strict",
+            samesite="none",
             max_age=3600  # 1 hour
         )
         
@@ -306,7 +306,7 @@ async def refresh_token(request: Request, response: Response):
             value=session.refresh_token,
             httponly=True,
             secure=True,
-            samesite="strict",
+            samesite="none",
             max_age=604800  # 7 days
         )
         
@@ -363,13 +363,13 @@ async def signout(response: Response, current_user: User = Depends(get_current_u
             key="access_token",
             httponly=True,
             secure=True,
-            samesite="strict"
+            samesite="none"
         )
         response.delete_cookie(
             key="refresh_token", 
             httponly=True,
             secure=True,
-            samesite="strict"
+            samesite="none"
         )
         
         return {"message": "Successfully signed out"}
